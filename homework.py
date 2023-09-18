@@ -30,6 +30,9 @@ HOMEWORK_VERDICTS = {
     'rejected': 'Работа проверена: у ревьюера есть замечания.'
 }
 
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
+
 
 def check_tokens():
     """Проверка доступности переменных окружения."""
@@ -37,14 +40,10 @@ def check_tokens():
         if globals()[token] is None:
             logging.critical(f'{token} отсутствует или не доступен.')
             exit()
-        else:
-            return
 
 
 def send_message(bot, message):
     """Отправка сообщения в Telegram чат."""
-    logger = logging.getLogger(__name__)
-    logger.setLevel(logging.DEBUG)
     try:
         bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=message)
         logger.debug(f'Сообщение успешно отправлено в Telegram: {message}')
@@ -64,13 +63,11 @@ def get_api_answer(timestamp):
 
     if homework_statuses.status_code == HTTPStatus.OK:
         try:
-            response = homework_statuses.json()
-            return response
+            return homework_statuses.json()
         except JSONDecodeError as error:
             raise Exception(f'Ошибка при преобразовании'
                             f'ответа сервера в JSON: {error}')
     else:
-        error_message = ''
         if homework_statuses.status_code == HTTPStatus.BAD_REQUEST:
             error_message = ('Некорректный запрос:'
                              'проверьте заголовки и параметры.')
@@ -128,26 +125,38 @@ def parse_status(homework):
     if homework_status in HOMEWORK_VERDICTS:
         verdict = HOMEWORK_VERDICTS[homework_status]
         return f'Изменился статус проверки работы "{homework_name}". {verdict}'
-    else:
-        message = 'Статус домашней работы не найден в базе статусов.'
-        raise HomeworkStatusError(message)
+    message = 'Статус домашней работы не найден в базе статусов.'
+    raise HomeworkStatusError(message)
 
 
 def main():
     """Основная логика работы бота."""
     check_tokens()
     bot = telegram.Bot(token=TELEGRAM_TOKEN)
-    timestamp = 0
+    timestamp = int(time.time())
+    last_status = ""
+    last_error_text = ""
+
     while True:
         try:
-            response = get_api_answer(timestamp)
+            response = get_api_answer(timestamp - RETRY_PERIOD)
+            new_timestamp = response.get('current_date', timestamp)
             homeworks = check_response(response)
             if homeworks:
-                message = parse_status(homeworks[0])
-                send_message(bot, message)
+                new_status = parse_status(homeworks[0])
+                if new_status != last_status:
+                    message = parse_status(homeworks[0])
+                    send_message(bot, message)
+
+            timestamp = new_timestamp
+            last_error_text = ""
+
         except Exception as error:
             logging.error(error)
-            send_message(bot, error)
+            if str(error) != last_error_text:
+                send_message(bot, str(error))
+                last_error_text = str(error)
+
         finally:
             time.sleep(RETRY_PERIOD)
 
