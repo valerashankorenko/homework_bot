@@ -22,7 +22,7 @@ ENV_VARIABLES = ['PRACTICUM_TOKEN', 'TELEGRAM_TOKEN', 'TELEGRAM_CHAT_ID']
 RETRY_PERIOD = 600
 ENDPOINT = 'https://practicum.yandex.ru/api/user_api/homework_statuses/'
 HEADERS = {'Authorization': f'OAuth {PRACTICUM_TOKEN}'}
-
+TIME_IN_SECONDS = 300
 
 HOMEWORK_VERDICTS = {
     'approved': 'Работа проверена: ревьюеру всё понравилось. Ура!',
@@ -49,7 +49,8 @@ def send_message(bot, message):
         logger.debug(f'Сообщение успешно отправлено в Telegram: {message}')
         return True
     except telegram.error.TelegramError as error:
-        raise Exception(f'Сбой в работе программы: {error}')
+        logger.error(f'Сбой в работе программы: {error}')
+        return False
 
 
 def get_api_answer(timestamp):
@@ -67,23 +68,23 @@ def get_api_answer(timestamp):
         except JSONDecodeError as error:
             raise Exception(f'Ошибка при преобразовании'
                             f'ответа сервера в JSON: {error}')
+
+    if homework_statuses.status_code == HTTPStatus.BAD_REQUEST:
+        error_message = ('Некорректный запрос:'
+                         'проверьте заголовки и параметры.')
+    elif homework_statuses.status_code == HTTPStatus.UNAUTHORIZED:
+        error_message = 'Ошибка авторизации: проверьте API-ключ.'
+    elif homework_statuses.status_code == HTTPStatus.FORBIDDEN:
+        error_message = ('Доступ запрещен:'
+                         'у вас нет прав для доступа к этому ресурсу.')
+    elif homework_statuses.status_code == HTTPStatus.NOT_FOUND:
+        error_message = ('Ресурс не найден:'
+                         'проверьте правильность URL-адреса эндпоинта.')
     else:
-        if homework_statuses.status_code == HTTPStatus.BAD_REQUEST:
-            error_message = ('Некорректный запрос:'
-                             'проверьте заголовки и параметры.')
-        elif homework_statuses.status_code == HTTPStatus.UNAUTHORIZED:
-            error_message = 'Ошибка авторизации: проверьте API-ключ.'
-        elif homework_statuses.status_code == HTTPStatus.FORBIDDEN:
-            error_message = ('Доступ запрещен:'
-                             'у вас нет прав для доступа к этому ресурсу.')
-        elif homework_statuses.status_code == HTTPStatus.NOT_FOUND:
-            error_message = ('Ресурс не найден:'
-                             'проверьте правильность URL-адреса эндпоинта.')
-        else:
-            error_message = (f'Ошибка при запросе к API.'
-                             f'Код статуса: {homework_statuses.status_code}.'
-                             f'Причина: {homework_statuses.reason}')
-        raise Exception(error_message)
+        error_message = (f'Ошибка при запросе к API.'
+                         f'Код статуса: {homework_statuses.status_code}.'
+                         f'Причина: {homework_statuses.reason}')
+    raise Exception(error_message)
 
 
 def check_response(response):
@@ -133,8 +134,7 @@ def main():
     """Основная логика работы бота."""
     check_tokens()
     bot = telegram.Bot(token=TELEGRAM_TOKEN)
-    timestamp = int(time.time())
-    last_status = ""
+    timestamp = (int(time.time())) - TIME_IN_SECONDS
     last_error_text = ""
 
     while True:
@@ -143,19 +143,19 @@ def main():
             new_timestamp = response.get('current_date', timestamp)
             homeworks = check_response(response)
             if homeworks:
-                new_status = parse_status(homeworks[0])
-                if new_status != last_status:
-                    message = parse_status(homeworks[0])
-                    send_message(bot, message)
-
-            timestamp = new_timestamp
-            last_error_text = ""
+                message = parse_status(homeworks[0])
+                send_message(bot, message)
+                timestamp = new_timestamp
+                last_error_text = ""
 
         except Exception as error:
-            logging.error(error)
+            logger.error(error)
             if str(error) != last_error_text:
-                send_message(bot, str(error))
-                last_error_text = str(error)
+                result = send_message(bot, str(error))
+                if result:
+                    last_error_text = str(error)
+                else:
+                    logger.error('Не удалось отправить сообщение в Telegram')
 
         finally:
             time.sleep(RETRY_PERIOD)
