@@ -135,28 +135,28 @@ def main():
     check_tokens()
     bot = telegram.Bot(token=TELEGRAM_TOKEN)
     timestamp = (int(time.time())) - TIME_IN_SECONDS
-    last_error_text = ""
+    last_error = None
 
     while True:
         try:
             response = get_api_answer(timestamp - RETRY_PERIOD)
             new_timestamp = response.get('current_date', timestamp)
             homeworks = check_response(response)
+
             if homeworks:
                 message = parse_status(homeworks[0])
                 send_message(bot, message)
-                timestamp = new_timestamp
-                last_error_text = ""
 
+            timestamp = new_timestamp
+            last_error = None
         except Exception as error:
             logger.error(error)
-            if str(error) != last_error_text:
+            if error != last_error:
                 result = send_message(bot, str(error))
                 if result:
-                    last_error_text = str(error)
+                    last_error = error
                 else:
                     logger.error('Не удалось отправить сообщение в Telegram')
-
         finally:
             time.sleep(RETRY_PERIOD)
 
